@@ -1,0 +1,207 @@
+require 'yaml'
+current_dir = File.dirname(File.expand_path(__FILE__))
+config_file = YAML.load_file("#{current_dir}/Config.yaml")
+settings = config_file['configs']
+# Making a Global Variable to avoid passing to params. A capital will also work to create a constant that is global scoped
+$setting = settings
+#SETTING = settings
+
+#variables
+VM_BOX = settings['box_name']
+MASTERS_COUNT = settings['nodes']['masters'].count
+WORKERS_COUNT = settings['nodes']['workers'].count
+
+#puts "{\n VM_BOX=#{VM_BOX}}"
+#puts "--- Loaded Config.yaml Variables ---"
+#puts "#{$setting}"
+
+def setup_hosts(config)
+
+  config.vm.provision "shell" do |s|
+    s.path = "setup-hosts.sh"
+    s.name = "setup-hosts"
+    s.args = [
+      $setting['num_of_control_planes'],
+      $setting['num_of_worker_nodes'],
+      $setting['num_of_loadbalancers'],
+      "eth1",
+      $setting['network']['ip_address'],
+      $setting['network']['master_ip_start'],
+      $setting['network']['worker_ip_start'],
+      $setting['network']['lb_ip_start']
+    ]
+  end
+
+end
+
+def setup_dns(config)
+
+  config.vm.provision "shell" do |s|
+    s.path = "setup-dns.sh"
+    s.name = "setup-dns"
+    s.args = [
+      $setting['num_of_control_planes'],
+      $setting['num_of_worker_nodes'],
+      $setting['num_of_loadbalancers'],
+      "eth1",
+      $setting['network']['ip_address'],
+      $setting['network']['master_ip_start'],
+      $setting['network']['worker_ip_start'],
+      $setting['network']['lb_ip_start']
+    ]
+  end
+
+end
+
+def kubernetes_common(config)
+
+  config.vm.provision "shell" do |s|
+    s.path = "./kubernetes/common.sh"
+    s.name = "kubernetes-common"
+    s.args = [
+      $setting['use_runtime'],
+      $setting['runtime_version']
+    ]
+  end
+
+end
+
+def kubernetes_controlplane(machine,node)
+
+  node.vm.provision "shell" do |s|
+    s.path = "./kubernetes/controlplane.sh"
+    s.name = "kubernetes-controlplane"
+    s.args = [
+      $setting['network']['pod_cidr'],
+      $setting['network']['service_cidr']
+    ]
+  end
+end
+
+def kubernetes_controlplane_vagrant(machine,node)
+
+    node.vm.provision "shell" do |s|
+      s.path = "./kubernetes/controlplane_vagrant.sh"
+      s.name = "kubernetes-controlplane-vagrant"
+      s.privileged = false
+      s.args = [
+        $setting['network']['pod_cidr'],
+        $setting['network']['service_cidr']
+      ]
+    end
+end
+
+def kubernetes_workers(machine,node)
+
+  node.vm.provision "shell" do |s|
+    s.path = "./kubernetes/workers.sh"
+    s.name = "kubernetes-workers"
+    s.args = [
+      $setting['network']['pod_cidr'],
+      $setting['network']['service_cidr']
+    ]
+  end
+
+end
+
+def kubernetes_workers_vagrant(machine,node)
+
+  node.vm.provision "shell" do |s|
+    s.path = "./kubernetes/workers_vagrant.sh"
+    s.name = "kubernetes-workers-vagrant"
+    s.privileged = false
+    s.args = [
+      $setting['network']['pod_cidr'],
+      $setting['network']['service_cidr']
+    ]
+  end
+
+end
+
+Vagrant.configure("2") do |config|
+  #puts "##START##"
+  config.vm.box = settings['box_name']
+  config.vm.boot_timeout = 900
+  config.vm.box_check_update = false
+
+  # puts "#{MASTERS_COUNT}"
+  # puts "#{WORKERS_COUNT}"
+  # puts "#{LBS_COUNT}"
+  setup_hosts(config)
+  setup_dns(config)
+  kubernetes_common(config)
+
+  settings['nodes']['masters'].each.with_index(1) do |machine,i|
+    #puts "---MASTER-#{i}---"
+    #puts "#{machine}"
+    #puts "#{node["memory"]}"
+    config.vm.define "#{machine["hostname"]}" do |node|
+      node.vm.provider "vmware_fusion" do |vb|
+        #vb.name = "controlplane"
+        vb.vmx["memsize"] = "#{machine["memory"]}"
+        vb.vmx["numvcpus"] = "#{machine["cpu"]}"
+      end
+      node.vm.hostname = "#{machine["hostname"]}"
+      #TEST = "#{settings['network']['ip_address']}." + "#{settings['network']['master_ip_start']+i}"
+      #puts "#{TEST}"
+      node.vm.network :private_network, ip: "#{settings['network']['ip_address']}." + "#{settings['network']['master_ip_start']+i}"
+      #node.vm.network "forwarded_port", guest: 22, host: "#{settings['network']['master_forward_port']+i}"
+      
+      #setup_hosts(machine,node)
+      #setup_dns(machine,node)
+      #kubernetes_common(machine,node)
+      kubernetes_controlplane(machine,node)
+      kubernetes_controlplane_vagrant(machine,node)
+    end
+  end
+
+
+  settings['nodes']['workers'].each.with_index(1) do |machine,i|
+    #puts "---WORKER-#{i}---"
+    #puts "#{machine}"
+    config.vm.define "#{machine["hostname"]}" do |node|
+      node.vm.provider "vmware_fusion" do |vb|
+        #vb.name = "controlplane"
+        vb.vmx["memsize"] = "#{machine["memory"]}"
+        vb.vmx["numvcpus"] = "#{machine["cpu"]}"
+      end
+      node.vm.hostname = "#{machine["hostname"]}"
+      #TEST = "#{settings['network']['ip_address']}." + "#{settings['network']['master_ip_start']+1}"
+      #puts "#{TEST}"
+      node.vm.network :private_network, ip: "#{settings['network']['ip_address']}." + "#{settings['network']['worker_ip_start']+i}"
+      #node.vm.network "forwarded_port", guest: 22, host: "#{settings['network']['worker_forward_port']+i}"
+    
+      #setup_hosts(machine,node)
+      #setup_dns(machine,node)
+      kubernetes_workers(machine,node)
+      kubernetes_workers_vagrant(machine,node)
+
+    end
+  end
+
+  if settings['nodes']['loadbalancers']
+    settings['nodes']['loadbalancers'].each.with_index(1) do |machine,i|
+      #puts "---LB-#{i}---"
+      #puts "#{machine}"
+      config.vm.define "#{machine["hostname"]}" do |node|
+        node.vm.provider "vmware_fusion" do |vb|
+          #vb.name = "controlplane"
+          vb.vmx["memsize"] = "#{machine["memory"]}"
+          vb.vmx["numvcpus"] = "#{machine["cpu"]}"
+        end
+        node.vm.hostname = "#{machine["hostname"]}"
+        #TEST = "#{settings['network']['ip_address']}." + "#{settings['network']['master_ip_start']+1}"
+        #puts "#{TEST}"
+        node.vm.network :private_network, ip: "#{settings['network']['ip_address']}." + "#{settings['network']['lb_ip_start']+i}"
+        #node.vm.network "forwarded_port", guest: 22, host: "#{settings['network']['lb_forward_port']+i}"
+      
+        #setup_hosts(machine,node)
+        #setup_dns(machine,node)
+      end
+    end
+  
+  end 
+  # config.vm.provision "shell", inline: <<-SHELL
+  # cat /etc/hosts
+  # SHELL
+end

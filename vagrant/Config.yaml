@@ -1,0 +1,41 @@
+configs:
+  box_name: spox/ubuntu-arm  #gyptazy/ubuntu22.04-arm64
+  arch: arm64
+  network:
+    ip_address: 192.168.56
+    master_ip_start: 10
+    worker_ip_start: 20
+    lb_ip_start: 50
+    master_forward_port: 2710
+    worker_forward_port: 3710
+    lb_forward_port: 4710
+    pod_cidr: 10.244.0.0/16
+    service_cidr: 10.96.0.0/16
+    dns_servers:
+      - 8.8.8.8
+      - 8.8.4.4
+  num_of_control_planes: 1
+  num_of_worker_nodes: 2
+  num_of_loadbalancers: 1
+  nodes:
+    masters:
+    - id: 1
+      cpu: 2
+      memory: 4096
+      hostname: master-1
+    workers:
+    - id: 1
+      cpu: 3
+      memory: 2048
+      hostname: worker-1
+    - id: 2
+      cpu: 3
+      memory: 2048
+      hostname: worker-2
+    # loadbalancers:
+    # - id: 1
+    #   cpu: 1
+    #   memory: 2048
+    #   hostname: lb-1
+  use_runtime: containerd
+  runtime_version: 1.7.12
